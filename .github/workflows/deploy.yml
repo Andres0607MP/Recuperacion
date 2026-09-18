@@ -92,6 +92,18 @@ jobs:
       contents: read
 
     steps:
+      - name: Descargar código del repositorio
+        uses: actions/checkout@v4
+
+      - name: Copiar docker-compose.yml a EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "~/deploy/"
+
       - name: Desplegar en EC2 mediante SSH
         uses: appleboy/ssh-action@v1
         with:
@@ -110,33 +122,16 @@ jobs:
               -u ${{ github.actor }} \
               --password-stdin
 
-            echo "Descargando imagen ${{
-              env.REGISTRY
-            }}/${{
-              env.IMAGE_NAME
-            }}:${{
-              github.sha
-            }}..."
+            echo "Configurando variable de imagen para el SHA actual..."
+            export API_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
 
-            docker pull \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            echo "Descargando imágenes..."
+            cd ~/deploy
+            docker compose pull
 
-            echo "Deteniendo contenedor anterior..."
+            echo "Levantando/actualizando stack con Docker Compose..."
+            docker compose up -d --remove-orphans
 
-            docker stop api-fortaleza-nube || true
-
-            echo "Eliminando contenedor anterior..."
-
-            docker rm api-fortaleza-nube || true
-
-            echo "Iniciando nuevo contenedor..."
-
-            docker run -d \
-              --name api-fortaleza-nube \
-              --restart unless-stopped \
-              -p 8080:8080 \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             echo "Despliegue completado correctamente"
-            echo "Contenedor ejecutándose:"
-
-            docker ps --filter "name=api-fortaleza-nube"
+            echo "Contenedores ejecutándose:"
+            docker compose ps
