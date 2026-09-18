@@ -13,6 +13,7 @@ env:
 jobs:
   seguridad-y-construccion:
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       packages: write
@@ -22,39 +23,53 @@ jobs:
       - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js 20
+      - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Instalar dependencias
-        run: npm ci --only=production
+        run: npm ci --omit=dev
 
       - name: Analizar vulnerabilidades de npm
         run: npm audit --audit-level=high
 
       - name: Construir imagen Docker
         run: |
-          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            .
+
+          docker tag \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Analizar vulnerabilidades de la imagen Docker con Trivy
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
 
       - name: Subir resultados de Trivy a GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
         if: always()
+        uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: trivy-results.sarif
+
+      - name: Bloquear pipeline por vulnerabilidades HIGH o CRITICAL
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
 
       - name: Iniciar sesión en GitHub Container Registry
+        if: success()
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -62,6 +77,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publicar imagen Docker en GHCR
+        if: success()
         run: |
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
@@ -69,7 +85,9 @@ jobs:
   despliegue:
     needs: seguridad-y-construccion
     runs-on: ubuntu-latest
+
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
     permissions:
       contents: read
 
@@ -82,21 +100,43 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
+
+            echo "Iniciando despliegue en EC2"
+
             echo "Iniciando sesión en GHCR..."
-            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            
-            echo "Descargando la última imagen..."
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            
-            echo "Deteniendo y eliminando el contenedor anterior..."
+
+            echo "${{ secrets.GHCR_PAT }}" | \
+              docker login ghcr.io \
+              -u ${{ github.actor }} \
+              --password-stdin
+
+            echo "Descargando imagen ${{
+              env.REGISTRY
+            }}/${{
+              env.IMAGE_NAME
+            }}:${{
+              github.sha
+            }}..."
+
+            docker pull \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+            echo "Deteniendo contenedor anterior..."
+
             docker stop api-fortaleza-nube || true
+
+            echo "Eliminando contenedor anterior..."
+
             docker rm api-fortaleza-nube || true
-            
-            echo "Iniciando el nuevo contenedor..."
+
+            echo "Iniciando nuevo contenedor..."
+
             docker run -d \
               --name api-fortaleza-nube \
               --restart unless-stopped \
               -p 8080:8080 \
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            
             echo "Despliegue completado correctamente"
+            echo "Contenedor ejecutándose:"
+
+            docker ps --filter "name=api-fortaleza-nube"
