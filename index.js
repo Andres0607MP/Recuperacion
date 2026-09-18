@@ -1,6 +1,6 @@
 const express = require('express');
 const app = express();
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 8080;
 
 app.get('/', (req, res) => {
     res.status(200).json({
@@ -14,7 +14,7 @@ app.get('/datos',(req, res) => {
 });
 
 app.get('/api/crash', (req, res) => {
-    cosole.error("[FATAL ERROR] Fallo de segmento. El sistema se ha quedado sin memoria.");
+    console.error("[FATAL ERROR] Fallo de segmento. El sistema se ha quedado sin memoria.");
     process.exit(1);
 });
 
